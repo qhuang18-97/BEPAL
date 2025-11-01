@@ -56,14 +56,14 @@ class GymWrapper(object):
     def reset(self, epoch):
         reset_args = getargspec(self.env.reset).args
         if 'epoch' in reset_args:
-            obs, action_mask = self.env.reset(epoch)
+            obs = self.env.reset(epoch)
         else:
-            obs, action_mask = self.env.reset()
+            obs = self.env.reset()
 
         obs = self._flatten_obs(obs) #for conv
         #obs = np.expand_dims(obs, 0)
         #obs = torch.from_numpy(obs).double()
-        return obs, action_mask
+        return obs
 
     def display(self):
         self.env.render()
@@ -77,9 +77,9 @@ class GymWrapper(object):
         # instead of doing this
         if self.dim_actions == 1:
             action = action[0]
-        obs, action_mask, r, done, info = self.env.step(action)
+        obs, r, done, info = self.env.step(action)
         obs = self._flatten_obs(obs)
-        return (obs, action_mask, r, done, info)
+        return (obs, r, done, info)
 
     def reward_terminal(self):
         if hasattr(self.env, 'reward_terminal'):

@@ -122,8 +122,8 @@ if args.ic3net:
 
     # For TJ set comm action to 1 as specified in paper to showcase
     # importance of individual rewards even in cooperative games
-    if args.env_name == "traffic_junction":
-        args.comm_action_one = True
+    # if args.env_name == "traffic_junction":
+    #     args.comm_action_one = True
 # Enemy comm
 args.nfriendly = args.nagents
 if hasattr(args, 'enemy_comm') and args.enemy_comm:
@@ -226,7 +226,7 @@ def run(num_epochs):
             if n == args.epoch_size - 1 and args.display:
                 trainer.display = True
             s = trainer.train_batch(ep)
-            trainer.scheduler.step()
+            # trainer.scheduler.step()
             merge_stat(s, stat)
             trainer.display = False
 

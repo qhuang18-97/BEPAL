@@ -5,13 +5,17 @@ import copy
 import torch
 import torch.nn.functional as F
 from torch import nn
-import gcn_mod
+
 from models import MLP
 from action_utils import select_action, translate_action
 # import torch_geometric
 '''
 Dynamic graph version comm
 '''
+
+def nPr(n,r):
+    f = math.factorial
+    return f(n)//f(n-r)
 
 class CommNetMLP(nn.Module):
     """
@@ -46,49 +50,21 @@ class CommNetMLP(nn.Module):
             self.heads = nn.ModuleList([nn.Linear(args.hid_size, o)
                                         for o in args.naction_heads])
 
-        '''
-        ### finised running in 7.28 best succ 0.85
-        self.mapdecode = nn.Sequential(
-            nn.Linear(self.args.hid_size, self.args.hid_size),
-            nn.Linear(self.args.hid_size, 6*11),
-            nn.LeakyReLU()
-        )
-
-        self.gnn_decoder = nn.Sequential(
-                nn.Linear(self.args.hid_size, self.args.hid_size),
-                nn.Linear(self.args.hid_size, 6*6),
-                nn.LeakyReLU()
-                )
         
-        self.griddecode = nn.Sequential(
-            nn.Linear(args.hid_size, (self.args.dim - 2 * 3 + 2) * (self.args.dim - 2 * 3 + 2) * 4),
-            nn.Unflatten(1, torch.Size([4, (self.args.dim - 2 * 3 + 2), (self.args.dim - 2 * 3 + 2)])),
-            nn.ReLU(inplace=False),
-            nn.ConvTranspose2d(4, 16, 3),
-            nn.ReLU(inplace=False),
-            nn.ConvTranspose2d(16, 1, 3),
-        )
-        '''
+        # if self.args.difficulty == 'easy':
+        #     npath = nPr(2,2)
+        # elif self.args.difficulty == 'medium':
+        #     npath = nPr(4, 2)
+        # elif self.args.difficulty == 'hard':
+        #     npath = nPr(8, 2)
+        # else:
+        #     raise NotImplementedError
         self.mapdecode = nn.Sequential(
             nn.Linear(self.args.hid_size, self.args.hid_size),
-            nn.Linear(self.args.hid_size, (self.args.nagents+1) * (2+2)), # +9    +2  +self.args.nagents+1+1    +self.args.nagents+1+2
+            nn.Linear(self.args.hid_size, (self.args.nagents) * (2+self.args.nagents+1)), # +9 +2 +8  +2  +self.args.nagents+1+1  +2
             nn.LeakyReLU()
         )
-        self.init_dim = 5  # Initial feature map size
-        self.cnndecode = nn.Sequential(
-            nn.Linear(args.hid_size*2, 32 * self.init_dim * self.init_dim),
-            nn.ReLU(inplace=True),
-            nn.Unflatten(1, (32, self.init_dim, self.init_dim)),  # → (batch, 64, 5, 5)
-
-            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # → (batch, 32, 10, 10)
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(16, 8, kernel_size=3, padding=1),  # → (batch, 16, 10, 10)
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(8, 3, kernel_size=1),  # → (batch, 3, 10, 10)
-            nn.ReLU(inplace=True)   # was nn.Sigmoid
-        )
+        # self.route_embed = nn.Embedding(npath+1, 8)  # e.g., (56, 8)
 
         # my multi-head attention model
         # --- tarmac model ----
@@ -107,25 +83,7 @@ class CommNetMLP(nn.Module):
                             - torch.eye(self.nagents, self.nagents)
 
 
-        # Since linear layers in PyTorch now accept * as any number of dimensions
-        # between last and first dim, num_agents dimension will be covered.
-        # The network below is function r in the paper for encoding
-        # initial environment stage
-        '''
-        ### finised running in 7.28 best succ 0.85  gcn_ppnode_obs_dr08
-        self.gcn_encoder = gcn_mod.GCN(2+self.args.nagents+1+1+9, 32, 16, 0.8)  # pp 9 16 16, grf 8 16 16, pp input with obs 17 16 16
-        self.encoder = nn.Sequential(
-                nn.Linear(16, args.hid_size),
-                nn.ReLU(),
-                nn.Linear(args.hid_size, args.hid_size),
-                )
         
-        self.gcn_encoder = gcn_mod.GAT(2+self.args.nagents+1+1+9, 32, 16, 0.1, 0.2, 3)
-        self.encoder = nn.Sequential(
-            nn.Linear( 16, args.hid_size),
-            nn.ReLU(),
-            nn.Linear(args.hid_size, args.hid_size),
-        )'''
         self.encoder = nn.Linear(num_inputs, args.hid_size)
 
         if args.recurrent:
@@ -144,11 +102,7 @@ class CommNetMLP(nn.Module):
             else:
                 self.f_modules = nn.ModuleList([nn.Linear(self.hid_size, args.hid_size)
                                                 for _ in range(self.comm_passes)])
-        # else:
-            # raise RuntimeError("Unsupported RNN type.")
-
-        # Our main function for converting current hidden state to next state
-        # self.f = nn.Linear(args.hid_size, args.hid_size)
+        
         if args.share_weights:
             self.C_module = nn.Linear(args.hid_size, args.hid_size)
             self.C_modules = nn.ModuleList([self.C_module
@@ -156,26 +110,13 @@ class CommNetMLP(nn.Module):
         else:
             self.C_modules = nn.ModuleList([nn.Linear(args.hid_size, args.hid_size)
                                             for _ in range(self.comm_passes)])
-        # self.C = nn.Linear(args.hid_size, args.hid_size)
-        '''
-        self.aggregator = nn.Sequential(
-            nn.Linear(args.hid_size, args.hid_size*2),
-            nn.LeakyReLU(),
-            nn.Linear(args.hid_size*2, args.hid_size),
-            nn.LeakyReLU(),
-            nn.Linear(args.hid_size, args.hid_size),
-            nn.LeakyReLU())
-        '''
-        # initialise weights as 0
+        
         if args.comm_init == 'zeros':
             for i in range(self.comm_passes):
                 self.C_modules[i].weight.data.zero_()
         self.tanh = nn.Tanh()
 
-        # print(self.C)
-        # self.C.weight.data.zero_()
-        # Init weights for linear layers
-        # self.apply(self.init_weights)
+       
 
         self.value_head = nn.Linear(self.args.hid_size, 1)
         self.value_global = nn.Linear(self.args.hid_size, self.args.nagents)
@@ -196,32 +137,7 @@ class CommNetMLP(nn.Module):
         agent_mask = agent_mask.expand(batch_size, n, n).unsqueeze(-1)
 
         return num_agents_alive, agent_mask
-    '''
-    def forward_state_encoder(self, x):
-        hidden_state, cell_state = None, None
-
-        if self.args.recurrent:
-            x, adj, extras = x
-            # x = torch.squeeze(x)
-            node_fmap = []
-            for i in range(len(x)):
-                ck = self.gcn_encoder(x[i][0], adj[i])
-                node_fmap.append(ck[x[i][1]])
-            x = torch.stack(node_fmap)
-            x = self.encoder(x)
-
-            if self.args.rnn_type == 'LSTM':
-                hidden_state, cell_state = extras
-            else:
-                hidden_state = extras
-            # hidden_state = self.tanh( self.hidd_encoder(prev_hidden_state) + x)
-        else:
-            x = self.encoder(x)
-            x = self.tanh(x)
-            hidden_state = x
-
-        return x, hidden_state, cell_state
-    '''
+    
     def forward_state_encoder(self, x):
         hidden_state, cell_state = None, None
         
@@ -263,12 +179,7 @@ class CommNetMLP(nn.Module):
                 v: value head
         """
 
-        # if self.args.env_name == 'starcraft':
-        #     maxi = x.max(dim=-2)[0]
-        #     x = self.state_encoder(x)
-        #     x = x.sum(dim=-2)
-        #     x = torch.cat([x, maxi], dim=-1)
-        #     x = self.tanh(x)
+       
 
         x, hidden_state, cell_state = self.forward_state_encoder(x)
 
@@ -329,8 +240,6 @@ class CommNetMLP(nn.Module):
 
                 # decoded = self.mapdecode(hidden_state)  # for map decoder original
                 node = self.mapdecode(hidden_state)
-                decoder_input = torch.cat((hidden_state, cell_state), 1)
-                cnn = self.cnndecode(decoder_input)
 
 
             else: # MLP|RNN
@@ -340,21 +249,13 @@ class CommNetMLP(nn.Module):
                 hidden_state = self.tanh(hidden_state)
                 node = self.mapdecode(hidden_state)
                 
-                cnn = self.cnndecode(hidden_state)
+                
                 
 
         # v = torch.stack([self.value_head(hidden_state[:, i, :]) for i in range(n)])
         # v = v.view(hidden_state.size(0), n, -1)
         value_head = self.value_head(hidden_state)
-        '''
-        vg = []
-        for i in range(len(x)):
-            # agent_hs = his_knowledge[i].repeat(self.args.nagents,1)
-            agent_hs = x[i].repeat(self.args.nagents,1)
-            single_value_global = self.value_global(agent_hs + masked_msg.squeeze()).sum(0)# .view(value_head.shape[0], 1)
-            vg.append(single_value_global)
-        value_global = torch.stack(vg)
-        '''
+       
         value_global = self.value_global(hidden_state).view(value_head.shape[0],value_head.shape[0])#1
         h = hidden_state.view(batch_size, n, self.args.hid_size) #origin
         # act_inp = torch.cat((hidden_state, c), dim=-1)         # cat inp
@@ -372,9 +273,9 @@ class CommNetMLP(nn.Module):
             action = [F.log_softmax(head(h), dim=-1) for head in self.heads]
         # action[-1] = action[-1].detach()
         if self.args.recurrent:
-            return action, value_head, value_global, (hidden_state.clone(), cell_state.clone()), node, cnn#, grid , auto_res
+            return action, value_head, value_global, (hidden_state.clone(), cell_state.clone()), node
         else:
-            return action, value_head, value_global, node, cnn #, grid
+            return action, value_head, value_global, node
 
     def init_weights(self, m):
         if type(m) == nn.Linear:
