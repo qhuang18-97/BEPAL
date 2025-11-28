@@ -89,8 +89,6 @@ class Trainer(object):
 
     def get_episode(self, epoch):
         episode = []
-        self.env.env.generate_fixed_inits(n_cases=20, seed=123)  # any seed you like
-        self.env.env.use_fixed_inits = True
         reset_args = getargspec(self.env.reset).args
         if 'epoch' in reset_args:
             state, action_mask = self.env.reset(epoch)

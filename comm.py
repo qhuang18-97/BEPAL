@@ -5,7 +5,7 @@ import copy
 import torch
 import torch.nn.functional as F
 from torch import nn
-import gcn_mod
+
 from models import MLP
 from action_utils import select_action, translate_action
 # import torch_geometric
