@@ -50,6 +50,13 @@ class PredatorPreyEnv(gym.Env):
         self.episode_over = False
         self.map_dim = 4
 
+        # === NEW: fixed init case support ===
+        self.use_fixed_inits = True
+        self.fixed_inits = []  # list of (predator_loc, prey_loc, grid_loc)
+        self.n_fixed_cases = 0
+        self.current_case_id = 0
+
+
     def init_curses(self):
         self.stdscr = curses.initscr()
         curses.start_color()
@@ -130,7 +137,7 @@ class PredatorPreyEnv(gym.Env):
                                             shape=(self.vocab_size, (2 * self.vision) + 1, (2 * self.vision) + 1),
                                             dtype=int)
         # Actual observation will be of the shape 1 * npredator * (2v+1) * (2v+1) * vocab_size
-
+        self.generate_fixed_inits()
         return
 
     def step(self, action):
@@ -194,12 +201,23 @@ class PredatorPreyEnv(gym.Env):
         self.curr_gen_range = self.dim
 
         # Locations
-        locs = self._get_cordinates()  # original without obstacle
-        wall_locs, locs = self.availiable_set()
-        # self.predator_loc, self.prey_loc = locs[:self.npredator], locs[self.npredator:]
-        self.predator_loc, self.prey_loc = locs[:self.npredator], locs[self.npredator:]
-        self.grid_loc = wall_locs
+        if self.use_fixed_inits and self.fixed_inits:
+            # Use epoch index to pick a case deterministically
+            case_idx = self.current_case_id % len(self.fixed_inits)
+            # self.current_case_id = case_idx
+            predator_loc, prey_loc, wall_locs = self.fixed_inits[case_idx]
 
+            # Copy to avoid accidental mutation of templates
+            self.predator_loc = predator_loc.copy()
+            self.prey_loc = prey_loc.copy()
+            self.grid_loc = wall_locs.copy()
+            self.current_case_id+=1
+        else:
+            # Original random initialization
+            locs = self._get_cordinates()  # original without obstacle (kept for completeness)
+            wall_locs, locs = self.availiable_set()
+            self.predator_loc, self.prey_loc = locs[:self.npredator], locs[self.npredator:]
+            self.grid_loc = wall_locs
 
         self._set_grid()
         self.set_explored()
@@ -212,6 +230,35 @@ class PredatorPreyEnv(gym.Env):
 
     def seed(self):
         return
+
+    def generate_fixed_inits(self, n_cases=20, seed=0):
+        """
+        Pre-generate a fixed set of initial configurations:
+        (predator_loc, prey_loc, wall_locs) for reproducible case studies.
+
+        Call this AFTER multi_agent_init(), when dims, npredator, nprey, ngrid are set.
+        """
+        self.fixed_inits = []
+        self.n_fixed_cases = n_cases
+
+        rng = np.random.RandomState(seed)
+
+        # Ensure we have a reasonable generation range
+        self.curr_gen_range = self.dim
+
+        for _ in range(n_cases):
+            # Make both numpy and random reproducible but different per case
+            np.random.seed(rng.randint(0, 10**9))
+            random.seed(rng.randint(0, 10**9))
+
+            wall_locs, locs = self.availiable_set()
+            predator_loc = locs[:self.npredator].copy()
+            prey_loc = locs[self.npredator:].copy()
+            grid_loc = wall_locs.copy()
+            self.fixed_inits.append((predator_loc, prey_loc, grid_loc))
+
+        self.use_fixed_inits = True
+
 
     def _get_cordinates(self):
         idx = np.random.choice(np.prod(self.dims), (self.npredator + self.nprey + self.ngrid), replace=False)
@@ -545,134 +592,134 @@ class PredatorPreyEnv(gym.Env):
                 self.prey_loc[0][1] = max(0, self.prey_loc[0][1] - 1)
                 move_flag = True
 
-    # def escape(self):  # mme
-    #     keys = [0, 1, 2, 3, 5]  # UP, RIGHT, DOWN, LEFT, STAY
-    #     available_actions = dict.fromkeys(keys, 0)
-    #     x, y = self.prey_loc[0]
-    
-    #     blocked_directions = set()  # Track blocked directions
-    
-    #     # Check if moving out of the map
-    #     if x == 0:  # At top boundary, UP is blocked
-    #         blocked_directions.add(0)
-    #     if x == self.dims[0] - 1:  # At bottom boundary, DOWN is blocked
-    #         blocked_directions.add(2)
-    #     if y == 0:  # At left boundary, LEFT is blocked
-    #         blocked_directions.add(3)
-    #     if y == self.dims[1] - 1:  # At right boundary, RIGHT is blocked
-    #         blocked_directions.add(1)
-    
-    #     for p in self.predator_loc:
-    #         distance = abs(x - p[0]) + abs(y - p[1])  # Manhattan Distance
-    #         if abs(x - p[0]) > self.vision or abs(y - p[1]) > self.vision:
-    #             continue  # Ignore predators too far away
-    
-    #         weight = 1 / (distance + 1)  # Closer predators are more dangerous
-    
-    #         # Predator is below, prey wants to go UP (0)
-    #         if p[0] - x > 0:
-    #             available_actions[0] += weight
-    #             if p[0] - x == 1 and p[1] == y:  # Predator directly below → block DOWN (2)
-    #                 blocked_directions.add(2)
-    
-    #         # Predator is above, prey wants to go DOWN (2)
-    #         elif x - p[0] > 0:
-    #             available_actions[2] += weight
-    #             if x - p[0] == 1 and p[1] == y:  # Predator directly above → block UP (0)
-    #                 blocked_directions.add(0)
-    
-    #         # Predator is right, prey wants to go LEFT (3)
-    #         if p[1] - y > 0:
-    #             available_actions[3] += weight
-    #             if p[1] - y == 1 and p[0] == x:  # Predator directly right → block RIGHT (1)
-    #                 blocked_directions.add(1)
-    
-    #         # Predator is left, prey wants to go RIGHT (1)
-    #         elif y - p[1] > 0:
-    #             available_actions[1] += weight
-    #             if y - p[1] == 1 and p[0] == x:  # Predator directly left → block LEFT (3)
-    #                 blocked_directions.add(3)
-    
-    #     # Check for wall obstacles blocking movement
-    #     for direction in [0, 1, 2, 3]:
-    #         if not self.is_valid_move([x, y], direction):
-    #             blocked_directions.add(direction)
-    
-    #     # If at least three directions are blocked, avoid staying
-    #     if len(blocked_directions) >= 3:
-    #         available_actions[5] = -999  # Avoid staying
-    #     # for invalid_action in list(blocked_directions):
-    #     #     available_actions[invalid_action] = -999
-    #     # if sum(available_actions.values()) == 0:
-    #     #     available_actions[5] = 999
-    
-    #     # Sort actions by least danger
-    #     sorted_actions = sorted(available_actions.items(), key=lambda item: item[1], reverse=True)
-    
-    #     # Filter valid moves (avoid obstacles and map boundaries)
-    #     valid_moves = [act for act, v in sorted_actions if act not in blocked_directions and v > 0]
-    
-    #     return valid_moves if valid_moves else [5]  # If no valid moves, stay
-
-    def escape(self): # mmss
+    def escape(self):  # mme
         keys = [0, 1, 2, 3, 5]  # UP, RIGHT, DOWN, LEFT, STAY
-        action_scores = {k: 0 for k in keys}
+        available_actions = dict.fromkeys(keys, 0)
         x, y = self.prey_loc[0]
-
-        # --- Step 1: Score actions based on predator locations ---
-        # A higher score will mean a SAFER direction.
+    
+        blocked_directions = set()  # Track blocked directions
+    
+        # Check if moving out of the map
+        if x == 0:  # At top boundary, UP is blocked
+            blocked_directions.add(0)
+        if x == self.dims[0] - 1:  # At bottom boundary, DOWN is blocked
+            blocked_directions.add(2)
+        if y == 0:  # At left boundary, LEFT is blocked
+            blocked_directions.add(3)
+        if y == self.dims[1] - 1:  # At right boundary, RIGHT is blocked
+            blocked_directions.add(1)
+    
         for p in self.predator_loc:
-            # Ignore predators outside of vision range
+            distance = abs(x - p[0]) + abs(y - p[1])  # Manhattan Distance
             if abs(x - p[0]) > self.vision or abs(y - p[1]) > self.vision:
-                continue
-
-            distance = abs(x - p[0]) + abs(y - p[1])
-
-            # If predator is directly adjacent, it's a huge threat.
-            # Heavily penalize moving towards it.
-            if distance == 1:
-                if p[0] - x > 0: action_scores[2] -= 1000  # Predator below, penalize DOWN
-                if x - p[0] > 0: action_scores[0] -= 1000  # Predator above, penalize UP
-                if p[1] - y > 0: action_scores[1] -= 1000  # Predator right, penalize RIGHT
-                if y - p[1] > 0: action_scores[3] -= 1000  # Predator left, penalize LEFT
-
-            # Prefer directions that increase distance to the predator.
-            # The further the predator, the smaller the influence.
-            weight = 1 / (distance + 1e-6)  # Add epsilon to avoid division by zero
-
-            if p[0] > x:
-                action_scores[0] += weight  # Predator below -> UP is safer
-            elif p[0] < x:
-                action_scores[2] += weight  # Predator above -> DOWN is safer
-            if p[1] > y:
-                action_scores[3] += weight  # Predator right -> LEFT is safer
-            elif p[1] < y:
-                action_scores[1] += weight  # Predator left -> RIGHT is safer
-
-        # --- Step 2: Make impossible moves have an infinitely bad score ---
-        # Check for walls and map boundaries
+                continue  # Ignore predators too far away
+    
+            weight = 1 / (distance + 1)  # Closer predators are more dangerous
+    
+            # Predator is below, prey wants to go UP (0)
+            if p[0] - x > 0:
+                available_actions[0] += weight
+                if p[0] - x == 1 and p[1] == y:  # Predator directly below → block DOWN (2)
+                    blocked_directions.add(2)
+    
+            # Predator is above, prey wants to go DOWN (2)
+            elif x - p[0] > 0:
+                available_actions[2] += weight
+                if x - p[0] == 1 and p[1] == y:  # Predator directly above → block UP (0)
+                    blocked_directions.add(0)
+    
+            # Predator is right, prey wants to go LEFT (3)
+            if p[1] - y > 0:
+                available_actions[3] += weight
+                if p[1] - y == 1 and p[0] == x:  # Predator directly right → block RIGHT (1)
+                    blocked_directions.add(1)
+    
+            # Predator is left, prey wants to go RIGHT (1)
+            elif y - p[1] > 0:
+                available_actions[1] += weight
+                if y - p[1] == 1 and p[0] == x:  # Predator directly left → block LEFT (3)
+                    blocked_directions.add(3)
+    
+        # Check for wall obstacles blocking movement
         for direction in [0, 1, 2, 3]:
             if not self.is_valid_move([x, y], direction):
-                action_scores[direction] = -float('inf')
+                blocked_directions.add(direction)
+    
+        # If at least three directions are blocked, avoid staying
+        if len(blocked_directions) >= 3:
+            available_actions[5] = -999  # Avoid staying
+        # for invalid_action in list(blocked_directions):
+        #     available_actions[invalid_action] = -999
+        # if sum(available_actions.values()) == 0:
+        #     available_actions[5] = 999
+    
+        # Sort actions by least danger
+        sorted_actions = sorted(available_actions.items(), key=lambda item: item[1], reverse=True)
+    
+        # Filter valid moves (avoid obstacles and map boundaries)
+        valid_moves = [act for act, v in sorted_actions if act not in blocked_directions and v > 0]
+    
+        return valid_moves if valid_moves else [5]  # If no valid moves, stay
 
-        # If the prey is cornered, staying still is a very bad idea.
-        num_blocked = sum(1 for score in action_scores.values() if score == -float('inf'))
-        if num_blocked >= 2:  # If at least two directions are hard-blocked
-            action_scores[5] -= 500  # Penalize staying
-
-        # --- Step 3: Choose the best of the valid moves ---
-        sorted_actions = sorted(action_scores.items(), key=lambda item: item[1], reverse=True)
-
-        # Filter out any moves that are impossible (into walls)
-        valid_moves = [act for act, score in sorted_actions if score != -float('inf')]
-
-        # If all options are impossible, the prey has no choice but to stay
-        if not valid_moves:
-            return [5]
-
-        # Return all valid actions, sorted from best to worst.
-        # The prey_take_action function will try them in order.
-        return valid_moves
+    # def escape(self): # mmss
+    #     keys = [0, 1, 2, 3, 5]  # UP, RIGHT, DOWN, LEFT, STAY
+    #     action_scores = {k: 0 for k in keys}
+    #     x, y = self.prey_loc[0]
+    #
+    #     # --- Step 1: Score actions based on predator locations ---
+    #     # A higher score will mean a SAFER direction.
+    #     for p in self.predator_loc:
+    #         # Ignore predators outside of vision range
+    #         if abs(x - p[0]) > self.vision or abs(y - p[1]) > self.vision:
+    #             continue
+    #
+    #         distance = abs(x - p[0]) + abs(y - p[1])
+    #
+    #         # If predator is directly adjacent, it's a huge threat.
+    #         # Heavily penalize moving towards it.
+    #         if distance == 1:
+    #             if p[0] - x > 0: action_scores[2] -= 1000  # Predator below, penalize DOWN
+    #             if x - p[0] > 0: action_scores[0] -= 1000  # Predator above, penalize UP
+    #             if p[1] - y > 0: action_scores[1] -= 1000  # Predator right, penalize RIGHT
+    #             if y - p[1] > 0: action_scores[3] -= 1000  # Predator left, penalize LEFT
+    #
+    #         # Prefer directions that increase distance to the predator.
+    #         # The further the predator, the smaller the influence.
+    #         weight = 1 / (distance + 1e-6)  # Add epsilon to avoid division by zero
+    #
+    #         if p[0] > x:
+    #             action_scores[0] += weight  # Predator below -> UP is safer
+    #         elif p[0] < x:
+    #             action_scores[2] += weight  # Predator above -> DOWN is safer
+    #         if p[1] > y:
+    #             action_scores[3] += weight  # Predator right -> LEFT is safer
+    #         elif p[1] < y:
+    #             action_scores[1] += weight  # Predator left -> RIGHT is safer
+    #
+    #     # --- Step 2: Make impossible moves have an infinitely bad score ---
+    #     # Check for walls and map boundaries
+    #     for direction in [0, 1, 2, 3]:
+    #         if not self.is_valid_move([x, y], direction):
+    #             action_scores[direction] = -float('inf')
+    #
+    #     # If the prey is cornered, staying still is a very bad idea.
+    #     num_blocked = sum(1 for score in action_scores.values() if score == -float('inf'))
+    #     if num_blocked >= 2:  # If at least two directions are hard-blocked
+    #         action_scores[5] -= 500  # Penalize staying
+    #
+    #     # --- Step 3: Choose the best of the valid moves ---
+    #     sorted_actions = sorted(action_scores.items(), key=lambda item: item[1], reverse=True)
+    #
+    #     # Filter out any moves that are impossible (into walls)
+    #     valid_moves = [act for act, score in sorted_actions if score != -float('inf')]
+    #
+    #     # If all options are impossible, the prey has no choice but to stay
+    #     if not valid_moves:
+    #         return [5]
+    #
+    #     # Return all valid actions, sorted from best to worst.
+    #     # The prey_take_action function will try them in order.
+    #     return valid_moves
 
     # def escape(self):   # dl 5: mmss+stay
     #     keys = [0, 1, 2, 3, 5]  # UP, RIGHT, DOWN, LEFT, STAY
