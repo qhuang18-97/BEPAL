@@ -10,8 +10,8 @@ from action_utils import *
 
 Transition = namedtuple('Transition', (
 'state', 'action', 'action_out', 'value', 'value_global', 'episode_mask', 'episode_mini_mask', 'next_state',
-'reward', 'misc', 'node_ground_truthg', 'location', 'node_decoded', 'gt_info', 'cnn_decoded', 'vis_info',
-'coordinates_agent', 'coordinates_prey'))  # 'l0','l1','l2''maploss' 'grid_maploss',
+'reward', 'misc', 'node_ground_truthg', 'location', 'node_decoded', 'gt_info',
+))  #'cnn_decoded' 'l0','l1','l2''maploss' 'grid_maploss',
 
 '''
 Dyanamic Graph version trainer
@@ -84,10 +84,13 @@ class Trainer(object):
                 adj[self.args.nagents+1+i, :] = -1
                 adj[:, self.args.nagents + 1 + i] = -1
         '''
-        return node_ground_truth[:self.args.nagents + 1, :2], torch.Tensor(nodes_org[:self.args.nagents + 1, :])  #
+        return node_ground_truth[:self.args.nagents + 1, :(2)], torch.Tensor(
+            nodes_org[:self.args.nagents + 1, :])  # +self.args.nagents + 1
 
     def get_episode(self, epoch):
         episode = []
+        self.env.env.generate_fixed_inits(n_cases=20, seed=123)  # any seed you like
+        self.env.env.use_fixed_inits = True
         reset_args = getargspec(self.env.reset).args
         if 'epoch' in reset_args:
             state, action_mask = self.env.reset(epoch)
@@ -118,7 +121,7 @@ class Trainer(object):
                 # x = [node, adj, prev_hid]
 
                 x = [state, prev_hid]
-                action_out, value, value_global, prev_hid, node_decoded, cnn_decoded = self.policy_net(x,
+                action_out, value, value_global, prev_hid, node_decoded = self.policy_net(x,
                                                                                                        info)  # , grid_decoded
 
                 if (t + 1) % self.args.detach_gap == 0:
@@ -143,11 +146,6 @@ class Trainer(object):
             gt_info = torch.Tensor(np.concatenate(
                 (self.env.env.obstacle_grid[np.newaxis], self.env.env.self_explored, self.env.env.others_explored),
                 axis=0))
-            vis_info = torch.Tensor(np.concatenate((self.env.env.agent_grid[np.newaxis],
-                                                    self.env.env.prey_grid[np.newaxis],
-                                                    self.env.env.obstacle_grid[np.newaxis]), axis=0))
-            coordinates_agent = torch.Tensor(self.env.env.predator_loc)
-            coordinates_prey = torch.Tensor(self.env.env.prey_loc)
 
             next_state, action_mask, reward, done, info = self.env.step(actual)
 
@@ -190,8 +188,8 @@ class Trainer(object):
                 self.env.display()
 
             trans = Transition(state, action, action_out, value, value_global, episode_mask, episode_mini_mask,
-                               next_state, reward, misc, node_ground_truthg, location, node_decoded, gt_info,
-                               cnn_decoded, vis_info, coordinates_agent, coordinates_prey)
+                               next_state, reward, misc, node_ground_truthg, location, node_decoded, gt_info
+                               )
             # trans = Transition(state, action, action_out, value, episode_mask, episode_mini_mask, next_state, reward, misc, maploss) grid_maploss,
 
             episode.append(trans)
@@ -199,8 +197,7 @@ class Trainer(object):
             if done:
                 break
         stat['num_steps'] = t + 1
-        stat['steps_taken'] = steps_used
-        print(steps_used)
+        stat['steps_taken'] = steps_used  # stat['num_steps']
 
         if hasattr(self.env, 'reward_terminal'):
             reward = self.env.reward_terminal()
@@ -255,7 +252,7 @@ class Trainer(object):
         deltas = torch.Tensor(batch_size, n)  # .cuda()
         advantages = torch.Tensor(batch_size, n)  # .cuda()
         values = values.view(batch_size, n)
-        # values_g = values_g.view(batch_size, n,n) #
+        # values_g = values_g.view(batch_size, n, n)  #
 
         prev_coop_return = 0
         prev_ncoop_return = 0
@@ -273,24 +270,8 @@ class Trainer(object):
             returns[i] = (self.args.mean_ratio * coop_returns[i].mean()) \
                          + ((1 - self.args.mean_ratio) * ncoop_returns[i])
 
-        vis_info = torch.stack(batch.vis_info, dim=0)
-        coordinates_agent = torch.stack(batch.coordinates_agent, dim=0)
-        coordinates_prey = torch.stack(batch.coordinates_prey, dim=0)
-        np.save('./pp_cases/gt_map_info'+str(ep), vis_info.detach().numpy())
-        np.save('./pp_cases/coordinates_agent' + str(ep), coordinates_agent.detach().numpy())
-        np.save('./pp_cases/coordinates_prey' + str(ep), coordinates_prey.detach().numpy())
-        np.save('./pp_cases/episode_mask' + str(ep), episode_masks.detach().numpy())
         node_decoded = torch.stack(batch.node_decoded, dim=0)
-        cnn_decoded = torch.stack(batch.cnn_decoded, dim=0)
 
-        map_gt_info = torch.stack(batch.gt_info)
-        real_gt = torch.cat(
-            [map_gt_info[:, 0:1, :, :].unsqueeze(1).expand(rewards.size(0), n, 1, self.args.dim, self.args.dim),
-             map_gt_info[:, 1:n + 1, :, :].view(rewards.size(0), n, 1, self.args.dim, self.args.dim),
-             map_gt_info[:, n + 1:, :, :].view(rewards.size(0), n, 1, self.args.dim, self.args.dim)], dim=2)
-        final_gt_downsampled = downsample_map(real_gt, target_size=10)
-        layerwise_loss = F.mse_loss(cnn_decoded, final_gt_downsampled, reduction='none')
-        cnn_loss = layerwise_loss.sum()
 
         node_loc = torch.stack(batch.node_ground_truthg, dim=0)
 
@@ -313,12 +294,8 @@ class Trainer(object):
 
         # decode_flag = torch.any(actions[:, :, 1] == 1, dim=1)
         vector = vector.repeat(1, n, 1, 1)
-        node_gt = torch.cat((node_loc, vector), 3)  # vector  node_loc
-
-        np.save('./pp_cases/node_decoded_belief' + str(ep) + '.npy', node_decoded.detach().numpy())
-        np.save('./pp_cases/node_ground_truth_belief' + str(ep) + '.npy',
-                node_gt.detach().numpy())
-
+        node_gt = torch.cat((node_loc, vector),
+                            3)  # torch.cat((node_loc,vector), 3) # node_loc torch.cat((node_loc,vector), 3) vector
         Loss_func = nn.MSELoss(reduction='sum')  # none
         node_maploss = Loss_func(node_decoded, node_gt.detach())  # .sum(dim=[1,2, 3]) /((n+1)*2)
 
@@ -357,8 +334,8 @@ class Trainer(object):
         # gloable value loss term
         # targets_g = returns.sum(1).view(batch_size,1)
         targets_g = returns.unsqueeze(1).repeat(1, n, 1)
-        # value_loss_g = (values_g/self.args.nagents - targets_g/self.args.nagents).pow(2).view(-1)
-        # value_loss_g = (values_g - targets_g).pow(2).view(-1) # Feb setting
+        # value_loss_g = (values_g / self.args.nagents - targets_g / self.args.nagents).pow(2).view(-1)
+        # value_loss_g = (values_g - targets_g).pow(2).view(-1)  # Feb setting
         # value_loss_g *= alive_masks.repeat(n).view(-1)  #
         # value_loss_g = value_loss_g.sum()
 
@@ -367,8 +344,9 @@ class Trainer(object):
 
         map_loss = (map_loss_m0)  # Feb setting  +n+1+9   +ng +ng     /(n+1)**2     /((n+1)*(2))
         stat['map_loss'] = map_loss.item()
+
         loss = action_loss + self.args.value_coeff * (
-            value_loss) + 0.5 * map_loss  # +  self.args.value_coeff/self.args.nagents * (cnn_loss) #+ self.args.value_coeff/self.args.nagents * (value_loss_g)
+            value_loss) + 0.5 * map_loss # + self.args.value_coeff / self.args.nagents * (cnn_loss)
 
         if not self.args.continuous:
             # entropy regularization term

@@ -75,20 +75,20 @@ class CommNetMLP(nn.Module):
             nn.LeakyReLU()
         )
         self.init_dim = 5  # Initial feature map size
-        self.cnndecode = nn.Sequential(
-            nn.Linear(args.hid_size*2, 32 * self.init_dim * self.init_dim),
-            nn.ReLU(inplace=True),
-            nn.Unflatten(1, (32, self.init_dim, self.init_dim)),  # → (batch, 64, 5, 5)
-
-            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # → (batch, 32, 10, 10)
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(16, 8, kernel_size=3, padding=1),  # → (batch, 16, 10, 10)
-            nn.ReLU(inplace=True),
-
-            nn.Conv2d(8, 3, kernel_size=1),  # → (batch, 3, 10, 10)
-            nn.ReLU(inplace=True)   # was nn.Sigmoid
-        )
+        # self.cnndecode = nn.Sequential(
+        #     nn.Linear(args.hid_size*2, 32 * self.init_dim * self.init_dim),
+        #     nn.ReLU(inplace=True),
+        #     nn.Unflatten(1, (32, self.init_dim, self.init_dim)),  # → (batch, 64, 5, 5)
+        #
+        #     nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # → (batch, 32, 10, 10)
+        #     nn.ReLU(inplace=True),
+        #
+        #     nn.Conv2d(16, 8, kernel_size=3, padding=1),  # → (batch, 16, 10, 10)
+        #     nn.ReLU(inplace=True),
+        #
+        #     nn.Conv2d(8, 3, kernel_size=1),  # → (batch, 3, 10, 10)
+        #     nn.ReLU(inplace=True)   # was nn.Sigmoid
+        # )
 
         # my multi-head attention model
         # --- tarmac model ----
@@ -330,7 +330,7 @@ class CommNetMLP(nn.Module):
                 # decoded = self.mapdecode(hidden_state)  # for map decoder original
                 node = self.mapdecode(hidden_state)
                 decoder_input = torch.cat((hidden_state, cell_state), 1)
-                cnn = self.cnndecode(decoder_input)
+                # cnn = self.cnndecode(decoder_input)
 
 
             else: # MLP|RNN
@@ -340,7 +340,7 @@ class CommNetMLP(nn.Module):
                 hidden_state = self.tanh(hidden_state)
                 node = self.mapdecode(hidden_state)
                 
-                cnn = self.cnndecode(hidden_state)
+                # cnn = self.cnndecode(hidden_state)
                 
 
         # v = torch.stack([self.value_head(hidden_state[:, i, :]) for i in range(n)])
@@ -372,9 +372,9 @@ class CommNetMLP(nn.Module):
             action = [F.log_softmax(head(h), dim=-1) for head in self.heads]
         # action[-1] = action[-1].detach()
         if self.args.recurrent:
-            return action, value_head, value_global, (hidden_state.clone(), cell_state.clone()), node, cnn#, grid , auto_res
+            return action, value_head, value_global, (hidden_state.clone(), cell_state.clone()), node#,, cnn grid , auto_res
         else:
-            return action, value_head, value_global, node, cnn #, grid
+            return action, value_head, value_global, node #,, cnn grid
 
     def init_weights(self, m):
         if type(m) == nn.Linear:
