@@ -7,6 +7,7 @@ from torch import optim
 import torch.nn as nn
 from utils import *
 from action_utils import *
+import os
 
 Transition = namedtuple('Transition', (
 'state', 'action', 'action_out', 'value', 'value_global', 'episode_mask', 'episode_mini_mask', 'next_state',
@@ -50,6 +51,39 @@ class Trainer(object):
         self.params = [p for p in self.policy_net.parameters()]
         self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=40000, gamma=1)
         # self.device = torch.device('cpu') #'cuda:0' if torch.cuda.is_available else
+
+    #     # === belief debug direct save ===
+    #     self.belief_buffer_dir = getattr(self.args, "belief_buffer_dir", "belief_buffer")
+    #     self.belief_buffer_dump_idx = 0
+    #
+    # def save_belief_buffer(self, node_decoded, node_gt):
+    #     """
+    #     每次 compute_grad 调用就立即保存一个 .pt 文件，不依赖 epoch。
+    #     文件名递增，例如:
+    #         belief_sample_00000.pt
+    #         belief_sample_00001.pt
+    #         ...
+    #     """
+    #     # 如果要临时关闭保存，可以在 args 加 save_belief_buffer=False
+    #     if hasattr(self.args, "save_belief_buffer") and not self.args.save_belief_buffer:
+    #         return
+    #
+    #     os.makedirs(self.belief_buffer_dir, exist_ok=True)
+    #
+    #     filename = os.path.join(
+    #         self.belief_buffer_dir,
+    #         f"belief_sample_{self.belief_buffer_dump_idx:05d}.pt"
+    #     )
+    #
+    #     # 直接保存预测与 GT
+    #     torch.save({
+    #         "node_decoded": node_decoded.detach().cpu().float(),
+    #         "node_gt": node_gt.detach().cpu().float(),
+    #     }, filename)
+    #
+    #     print(f"[BEPAL] saved belief sample → {filename}")
+    #
+    #     self.belief_buffer_dump_idx += 1
 
     def ground_truth_gen(self, env):
         nodes_org = np.concatenate((env.predator_loc, env.prey_loc), axis=0) / (self.args.dim - 1)  # ,env.grid_loc
@@ -119,8 +153,22 @@ class Trainer(object):
                 # x = [node, adj, prev_hid]
 
                 x = [state, prev_hid]
-                action_out, value, value_global, prev_hid, node_decoded = self.policy_net(x,
-                                                                                                       info)  # , grid_decoded
+                # trainer.py, inside get_episode(), before self.policy_net(x, info)
+
+                if self.args.vision_comm_test and self.args.env_name == 'predator_prey':
+                    loc = np.asarray(self.env.env.predator_loc[:self.args.nagents])  # shape [N, 2]
+
+                    dx = np.abs(loc[:, None, 0] - loc[None, :, 0])
+                    dy = np.abs(loc[:, None, 1] - loc[None, :, 1])
+
+                    # square vision window, consistent with env observation
+                    comm_range_mask = ((dx <= self.args.vision) & (dy <= self.args.vision)).astype(np.float32)
+
+                    # keep self-connection to avoid all-masked rows
+                    np.fill_diagonal(comm_range_mask, 1.0)
+
+                    info['comm_range_mask'] = comm_range_mask
+                action_out, value, value_global, prev_hid, node_decoded = self.policy_net(x,info)  # , grid_decoded
 
                 if (t + 1) % self.args.detach_gap == 0:
                     if self.args.rnn_type == 'LSTM':
@@ -354,7 +402,8 @@ class Trainer(object):
             stat['entropy'] = entropy.item()
             if self.args.entr > 0:
                 loss -= self.args.entr * entropy
-
+                # === 保存 belief 预测与 GT，用于之后离线对比 ===
+        # self.save_belief_buffer(node_decoded, node_gt)
         stat['loss'] = loss.item()
         # loss.backward()
 

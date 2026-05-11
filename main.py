@@ -108,7 +108,8 @@ parser.add_argument('--advantages_per_action', default=False, action='store_true
                     help='Whether to multipy log porb for each chosen action with advantages')
 parser.add_argument('--share_weights', default=False, action='store_true',
                     help='Share weights for hops')
-
+parser.add_argument('--vision_comm_test', action='store_true', default=False,
+    help='Restrict communication to agents within vision range during testing.')
 
 init_args_for_env(parser)
 args = parser.parse_args()

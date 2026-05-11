@@ -75,20 +75,20 @@ class CommNetMLP(nn.Module):
             nn.LeakyReLU()
         )
         self.init_dim = 5  # Initial feature map size
-        # self.cnndecode = nn.Sequential(
-        #     nn.Linear(args.hid_size*2, 32 * self.init_dim * self.init_dim),
-        #     nn.ReLU(inplace=True),
-        #     nn.Unflatten(1, (32, self.init_dim, self.init_dim)),  # → (batch, 64, 5, 5)
-        #
-        #     nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # → (batch, 32, 10, 10)
-        #     nn.ReLU(inplace=True),
-        #
-        #     nn.Conv2d(16, 8, kernel_size=3, padding=1),  # → (batch, 16, 10, 10)
-        #     nn.ReLU(inplace=True),
-        #
-        #     nn.Conv2d(8, 3, kernel_size=1),  # → (batch, 3, 10, 10)
-        #     nn.ReLU(inplace=True)   # was nn.Sigmoid
-        # )
+        self.cnndecode = nn.Sequential(
+            nn.Linear(args.hid_size*2, 32 * self.init_dim * self.init_dim),
+            nn.ReLU(inplace=True),
+            nn.Unflatten(1, (32, self.init_dim, self.init_dim)),  # → (batch, 64, 5, 5)
+
+            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # → (batch, 32, 10, 10)
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(16, 8, kernel_size=3, padding=1),  # → (batch, 16, 10, 10)
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(8, 3, kernel_size=1),  # → (batch, 3, 10, 10)
+            nn.ReLU(inplace=True)   # was nn.Sigmoid
+        )
 
         # my multi-head attention model
         # --- tarmac model ----
@@ -294,19 +294,55 @@ class CommNetMLP(nn.Module):
             # Choose current or prev depending on recurrent
             comm = hidden_state.view(batch_size, n, self.args.hid_size) if self.args.recurrent else hidden_state
             # comm = x.view(batch_size, n, self.args.hid_size) if self.args.recurrent else hidden_state # communicate observation
-            masked_msg = torch.zeros(comm.shape) * -1e9
-            for idx, agt in enumerate(comm_action):
-                if agt == 1:
-                    masked_msg[0, idx, :] = comm[0, idx, :]
-            query = self.state2query(comm).view(1, self.nagents, -1)
-            key = self.state2key(masked_msg).view(1, self.nagents, -1)
-            value = self.state2value(masked_msg).view(1, self.nagents, -1)
+            # masked_msg = torch.zeros(comm.shape) * -1e9
+            # for idx, agt in enumerate(comm_action):
+            #     if agt == 1:
+            #         masked_msg[0, idx, :] = comm[0, idx, :]
+            # query = self.state2query(comm).view(1, self.nagents, -1)
+            # key = self.state2key(masked_msg).view(1, self.nagents, -1)
+            # value = self.state2value(masked_msg).view(1, self.nagents, -1)
+            #
+            # # scores
+            # scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.hid_size)
+            #
+            # attn = F.softmax(scores, dim=-1)
+            # comm = torch.matmul(attn, value)
 
-            # scores
-            scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.hid_size)
 
-            attn = F.softmax(scores, dim=-1)
-            comm = torch.matmul(attn, value)
+            if self.args.hard_attn:
+                comm_action = torch.tensor(info['comm_action'], device=hidden_state.device)
+            else:
+                comm_action = torch.ones(self.nagents, device=hidden_state.device)
+
+            for i in range(self.comm_passes):
+                comm = hidden_state.view(batch_size, n, self.args.hid_size) if self.args.recurrent else hidden_state
+
+                masked_msg = torch.zeros_like(comm) - 1e9
+                for idx, agt in enumerate(comm_action):
+                    if agt == 1:
+                        masked_msg[0, idx, :] = comm[0, idx, :]
+
+                query = self.state2query(comm).view(batch_size, self.nagents, -1)
+                key = self.state2key(masked_msg).view(batch_size, self.nagents, -1)
+                value = self.state2value(masked_msg).view(batch_size, self.nagents, -1)
+
+                scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.hid_size)
+
+                # extra pairwise range mask for testing
+                if 'comm_range_mask' in info:
+                    range_mask = torch.as_tensor(
+                        info['comm_range_mask'],
+                        dtype=torch.bool,
+                        device=scores.device
+                    ).unsqueeze(0)  # [1, N, N]
+
+                    scores = scores.masked_fill(~range_mask, -1e9)
+
+                attn = F.softmax(scores, dim=-1)
+                comm = torch.matmul(attn, value)
+
+                context = comm.transpose(0, 1).contiguous().view(self.nagents, self.args.hid_size)
+                c = self.C_modules[i](context).unsqueeze(0)
 
             context = comm.transpose(0, 1).contiguous().view(self.nagents,
                                                              1 * self.args.hid_size)
