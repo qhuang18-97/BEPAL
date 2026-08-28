@@ -1,0 +1,13 @@
+name: IC3NET
+channels:
+  - defaults
+dependencies:
+  - python=3.8
+  # Must stay below 24.1: pip >= 24.1 rejects gym 0.21.0's malformed metadata
+  # ("opencv-python (>=3.)"), which breaks the pip section below.
+  - pip=24.0
+  - pip:
+      - gym==0.21.0
+      - numpy==1.24.3
+      - torch==2.0.1
+      - visdom==0.2.4
