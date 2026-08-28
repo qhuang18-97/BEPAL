@@ -1,8 +1,5 @@
 # Code of BEPAL for AAAI reproducibility Check
 
-Supported environments (`--env_name`): `predator_prey`, `traffic_junction`,
-`starcraft`, `rware`.
-
 ## Installation
 
 > **pip must be older than 24.1.** `gym==0.21.0` ships malformed metadata
